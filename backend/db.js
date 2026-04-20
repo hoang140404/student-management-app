@@ -32,6 +32,14 @@ function all(sql, params = []) {
   });
 }
 
+async function ensureColumn(tableName, columnName, definition) {
+  const columns = await all(`PRAGMA table_info(${tableName})`);
+  const exists = columns.some((column) => column.name === columnName);
+  if (!exists) {
+    await run(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
 async function createTables() {
   await run('PRAGMA foreign_keys = ON');
 
@@ -44,9 +52,15 @@ async function createTables() {
       fullName TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
       studentCode TEXT UNIQUE,
+      lecturerCode TEXT UNIQUE,
       createdAt TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  await ensureColumn('users', 'studentCode', 'TEXT');
+  await ensureColumn('users', 'lecturerCode', 'TEXT');
+  await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_studentCode_unique ON users(studentCode)');
+  await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_lecturerCode_unique ON users(lecturerCode)');
 
   await run(`
     CREATE TABLE IF NOT EXISTS students (
@@ -62,6 +76,23 @@ async function createTables() {
       userId INTEGER UNIQUE,
       createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(userId) REFERENCES users(id) ON DELETE SET NULL
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS lecturers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lecturerCode TEXT NOT NULL UNIQUE,
+      fullName TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      department TEXT,
+      degree TEXT,
+      gender TEXT,
+      dob TEXT,
+      phone TEXT,
+      userId INTEGER UNIQUE,
+      createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(userId) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
 
@@ -160,15 +191,25 @@ async function createTables() {
   `);
 }
 
-async function seedUser({ username, password, role, fullName, email, studentCode = null }) {
+async function seedUser({ username, password, role, fullName, email, studentCode = null, lecturerCode = null }) {
   const existed = await get('SELECT id FROM users WHERE username = ?', [username]);
-  if (existed) return existed.id;
+  if (existed) {
+    if (studentCode || lecturerCode) {
+      await run(
+        `UPDATE users
+         SET studentCode = COALESCE(studentCode, ?), lecturerCode = COALESCE(lecturerCode, ?)
+         WHERE id = ?`,
+        [studentCode, lecturerCode, existed.id]
+      );
+    }
+    return existed.id;
+  }
 
   const hashedPassword = await bcrypt.hash(password, 10);
   const result = await run(
-    `INSERT INTO users (username, password, role, fullName, email, studentCode)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [username, hashedPassword, role, fullName, email, studentCode]
+    `INSERT INTO users (username, password, role, fullName, email, studentCode, lecturerCode)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [username, hashedPassword, role, fullName, email, studentCode, lecturerCode]
   );
 
   return result.id;
@@ -192,6 +233,44 @@ async function seedStudent(student) {
       student.phone,
       student.userId || null
     ]
+  );
+
+  return result.id;
+}
+
+async function seedLecturer(lecturer) {
+  const existed = await get('SELECT id FROM lecturers WHERE lecturerCode = ? OR userId = ?', [lecturer.lecturerCode, lecturer.userId || 0]);
+  if (existed) {
+    await run(
+      `UPDATE users
+       SET lecturerCode = COALESCE(lecturerCode, ?), fullName = COALESCE(fullName, ?), email = COALESCE(email, ?)
+       WHERE id = ?`,
+      [lecturer.lecturerCode, lecturer.fullName, lecturer.email, lecturer.userId]
+    );
+    return existed.id;
+  }
+
+  const result = await run(
+    `INSERT INTO lecturers (lecturerCode, fullName, email, department, degree, gender, dob, phone, userId)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      lecturer.lecturerCode,
+      lecturer.fullName,
+      lecturer.email,
+      lecturer.department || '',
+      lecturer.degree || '',
+      lecturer.gender || '',
+      lecturer.dob || '',
+      lecturer.phone || '',
+      lecturer.userId || null
+    ]
+  );
+
+  await run(
+    `UPDATE users
+     SET lecturerCode = ?, fullName = ?, email = ?
+     WHERE id = ?`,
+    [lecturer.lecturerCode, lecturer.fullName, lecturer.email, lecturer.userId]
   );
 
   return result.id;
@@ -338,7 +417,20 @@ async function seedData() {
     password: 'lecturer123',
     role: 'lecturer',
     fullName: 'Nguyen Van Giang',
-    email: 'lecturer1@school.local'
+    email: 'lecturer1@school.local',
+    lecturerCode: 'GV001'
+  });
+
+  await seedLecturer({
+    lecturerCode: 'GV001',
+    fullName: 'Nguyen Van Giang',
+    email: 'lecturer1@school.local',
+    department: 'Công nghệ thông tin',
+    degree: 'Thạc sĩ',
+    gender: 'Nam',
+    dob: '1988-07-14',
+    phone: '0912345678',
+    userId: lecturerId
   });
 
   const studentUserId = await seedUser({
