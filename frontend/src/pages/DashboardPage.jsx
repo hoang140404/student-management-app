@@ -36,6 +36,7 @@ const roleSections = {
     { key: 'overview', label: 'Tổng quan', description: 'Thông tin nhanh về học tập' },
     { key: 'profile', label: 'Thông tin cá nhân', description: 'Xem hồ sơ cá nhân' },
     { key: 'grades', label: 'Điểm số', description: 'Xem dashboard bảng điểm và kết quả học tập' },
+    { key: 'gradeExport', label: 'Xuất điểm Excel', description: 'Tải bảng điểm cá nhân ra file Excel để lưu trữ' },
     { key: 'schedule', label: 'Lịch học', description: 'Lịch học tự động hiển thị theo môn đã đăng ký' },
     { key: 'weeklySchedule', label: 'Thời khóa biểu tuần', description: 'Xem thời khóa biểu tuần dạng lưới theo môn đã đăng ký' },
     { key: 'registration', label: 'Đăng ký môn', description: 'Đăng ký hoặc hủy đăng ký lớp học phần' },
@@ -61,6 +62,15 @@ function formatFeedbackStatus(status) {
   };
 
   return map[status] || status;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 export default function DashboardPage() {
@@ -650,6 +660,88 @@ export default function DashboardPage() {
     });
   }
 
+  function handleExportGradesExcel() {
+    if (!grades.length) {
+      setError('Chưa có dữ liệu điểm để xuất file Excel.');
+      return;
+    }
+
+    const exportRows = grades.map((grade, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(grade.courseCode)}</td>
+        <td>${escapeHtml(grade.courseName)}</td>
+        <td>${escapeHtml(grade.credits || 0)}</td>
+        <td>${escapeHtml(grade.lecturerName || '--')}</td>
+        <td>${escapeHtml(grade.semester)}</td>
+        <td>${escapeHtml(grade.midterm ?? '--')}</td>
+        <td>${escapeHtml(grade.final ?? '--')}</td>
+        <td>${escapeHtml(grade.total ?? '--')}</td>
+        <td>${escapeHtml(grade.letterGrade || '--')}</td>
+        <td>${escapeHtml(grade.notes || '--')}</td>
+      </tr>
+    `).join('');
+
+    const html = `<!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8" />
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; }
+            h1, h2, p { margin: 0 0 10px; }
+            .summary { margin: 18px 0; }
+            table { border-collapse: collapse; width: 100%; }
+            th, td { border: 1px solid #9ca3af; padding: 8px 10px; text-align: left; }
+            th { background: #dbeafe; }
+          </style>
+        </head>
+        <body>
+          <h1>Bảng điểm sinh viên</h1>
+          <p><strong>Họ tên:</strong> ${escapeHtml(profile?.fullName || user?.fullName || '--')}</p>
+          <p><strong>Mã sinh viên:</strong> ${escapeHtml(profile?.studentCode || user?.studentCode || '--')}</p>
+          <p><strong>Lớp:</strong> ${escapeHtml(profile?.className || '--')}</p>
+          <p><strong>Ngành:</strong> ${escapeHtml(profile?.major || '--')}</p>
+          <div class="summary">
+            <p><strong>Điểm trung bình:</strong> ${escapeHtml(averageGrade || '--')}</p>
+            <p><strong>Số môn đạt:</strong> ${escapeHtml(passedGrades.length)}</p>
+            <p><strong>Tín chỉ tích lũy:</strong> ${escapeHtml(earnedCredits)}</p>
+            <p><strong>Ngày xuất:</strong> ${escapeHtml(new Date().toLocaleString('vi-VN'))}</p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>STT</th>
+                <th>Mã môn</th>
+                <th>Tên môn</th>
+                <th>Tín chỉ</th>
+                <th>Giảng viên</th>
+                <th>Học kỳ</th>
+                <th>Giữa kỳ</th>
+                <th>Cuối kỳ</th>
+                <th>Tổng kết</th>
+                <th>Điểm chữ</th>
+                <th>Ghi chú</th>
+              </tr>
+            </thead>
+            <tbody>${exportRows}</tbody>
+          </table>
+        </body>
+      </html>`;
+
+    const blob = new Blob(['\ufeff', html], {
+      type: 'application/vnd.ms-excel;charset=utf-8;'
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `bang-diem-${profile?.studentCode || user?.username || 'sinh-vien'}.xls`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+    setMessage('Đã xuất bảng điểm ra file Excel thành công.');
+  }
+
   function renderSummaryCards() {
     return (
       <section className="stats-grid">
@@ -1137,6 +1229,14 @@ export default function DashboardPage() {
               <p>{isStudent ? 'Xem toàn bộ điểm số của bạn.' : 'Tìm kiếm theo sinh viên, môn học hoặc học kỳ.'}</p>
             </div>
 
+            {isStudent && (
+              <div className="toolbar">
+                <button className="btn btn-primary" type="button" onClick={handleExportGradesExcel}>
+                  Xuất file Excel
+                </button>
+              </div>
+            )}
+
             {!isStudent && (
               <div className="toolbar">
                 <input
@@ -1252,6 +1352,73 @@ export default function DashboardPage() {
               <div><strong>Thời khóa biểu tuần:</strong> {lecturerWeeklySchedules.length ? 'Đã cập nhật' : 'Chưa có dữ liệu'}</div>
             </div>
           )}
+        </div>
+      </section>
+    );
+  }
+
+  function renderGradeExportSection() {
+    return (
+      <section className="dashboard-grid two-columns">
+        <div className="card compact-card">
+          <div className="card-header">
+            <h3>Xuất bảng điểm ra Excel</h3>
+            <p>Tải bảng điểm cá nhân dưới dạng file Excel để nộp, lưu trữ hoặc in ra khi cần.</p>
+          </div>
+
+          <div className="profile-grid">
+            <div><strong>Họ tên:</strong> {profile?.fullName || user?.fullName || '--'}</div>
+            <div><strong>Mã sinh viên:</strong> {profile?.studentCode || user?.studentCode || '--'}</div>
+            <div><strong>Số môn đã có điểm:</strong> {grades.length}</div>
+            <div><strong>Điểm trung bình:</strong> {averageGrade || '--'}</div>
+          </div>
+
+          <div className="form-actions" style={{ marginTop: '20px' }}>
+            <button className="btn btn-primary" type="button" onClick={handleExportGradesExcel}>
+              Xuất file Excel
+            </button>
+          </div>
+        </div>
+
+        <div className="card compact-card wide-card">
+          <div className="card-header">
+            <h3>Dữ liệu sẽ được xuất</h3>
+            <p>File Excel bao gồm đầy đủ thông tin học phần và kết quả học tập hiện tại của bạn.</p>
+          </div>
+
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Mã môn</th>
+                  <th>Tên môn</th>
+                  <th>Tín chỉ</th>
+                  <th>Giảng viên</th>
+                  <th>Học kỳ</th>
+                  <th>Tổng kết</th>
+                  <th>Điểm chữ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {grades.map((grade) => (
+                  <tr key={grade.id}>
+                    <td>{grade.courseCode}</td>
+                    <td>{grade.courseName}</td>
+                    <td>{grade.credits || 0}</td>
+                    <td>{grade.lecturerName || '--'}</td>
+                    <td>{grade.semester}</td>
+                    <td>{grade.total}</td>
+                    <td><span className="pill success">{grade.letterGrade}</span></td>
+                  </tr>
+                ))}
+                {grades.length === 0 && (
+                  <tr>
+                    <td colSpan="7" className="empty-cell">Chưa có dữ liệu điểm số để xuất.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
     );
@@ -1769,6 +1936,7 @@ export default function DashboardPage() {
     if (activeSection === 'lecturers') return renderLecturersSection();
     if (activeSection === 'courses') return renderCoursesSection();
     if (activeSection === 'grades') return renderGradesSection();
+    if (activeSection === 'gradeExport') return renderGradeExportSection();
     if (activeSection === 'weeklySchedule') return renderWeeklyScheduleSection();
     if (activeSection === 'schedules' || activeSection === 'schedule') return renderSchedulesSection();
     if (activeSection === 'sections') return renderSectionsSection();
